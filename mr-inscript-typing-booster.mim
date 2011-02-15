@@ -34,7 +34,8 @@
 (macro
  (lookup
   (call libmimx-ibus-table lookup init select
-	"/usr/share/ibus-table/tables/marathi-inscript.db")))
+	"/usr/share/ibus-table/tables/marathi-inscript.db"
+	5 100)))
 
 (map
  (alpha
@@ -83,7 +84,7 @@
 
 (state
  (init
-  (alpha (shift alpha)))
+  (alpha (lookup) (shift alpha)))
 
  (alpha
   (alpha (lookup)))

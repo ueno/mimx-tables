@@ -34,7 +34,8 @@
 (macro
  (lookup
   (call libmimx-ibus-table lookup init select
-	"/usr/share/ibus-table/tables/marathi-phonetic.db")))
+	"/usr/share/ibus-table/tables/marathi-phonetic.db"
+	5 100)))
 
 (map
  (alpha

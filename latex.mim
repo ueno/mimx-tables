@@ -48,7 +48,7 @@
   ("," ",") ("." ".") ("?" "?") ("\\" "\\"))
  (lookup
   ((Tab) (call libmimx-ibus-table lookup init select
-	       "/usr/share/ibus-table/tables/latex.db")))
+	       "/usr/share/ibus-table/tables/latex.db" 2 100)))
 
  (change
   ((Left) (select @-))

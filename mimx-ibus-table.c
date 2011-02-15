@@ -29,7 +29,7 @@
 #include <m17n.h>
 #include <sqlite3.h>
 
-#undef DEBUG
+#define DEBUG 1
 #define MLEN 4			/* max key length */
 
 static const struct {
@@ -218,7 +218,7 @@ lookup (MPlist *args)
   char *sql = NULL, *msql = NULL;
   sqlite3_stmt *stmt;
   int offset, i, rc;
-  size_t len, xlen, wlen, mlen;
+  size_t len, xlen, wlen, mlen, max_candidates;
 
   ic = mplist_value (args);
   args = mplist_next (args);
@@ -231,6 +231,12 @@ lookup (MPlist *args)
   nbytes = mconv_encode_buffer (Mcoding_us_ascii, mt, buf, 256);
   buf[nbytes] = '\0';
   file = strdup ((const char *)buf);
+
+  args = mplist_next (args);
+  xlen = (long) mplist_value (args);
+
+  args = mplist_next (args);
+  max_candidates = (long) mplist_value (args);
 
   args = mplist_next (args);
   nbytes = mconv_encode_buffer (Mcoding_us_ascii, ic->preedit, buf, 256);
@@ -288,14 +294,19 @@ lookup (MPlist *args)
      the key length is exceeds mlen */
   len = nbytes > mlen ? mlen : nbytes;
   wlen = mlen - len + 1;
-  for (xlen = 2; xlen <= wlen + 1; xlen++)
+  for (; xlen <= wlen + 1; xlen++)
     {
       rc = sprintf (sql, "SELECT id, phrase FROM phrases WHERE mlen < %lu",
 		    len + xlen);
       if (rc < 0)
 	goto out;
       strcat (sql, msql);
-      strcat (sql, " ORDER BY mlen ASC, user_freq DESC, freq DESC, id ASC");
+      rc = sprintf (sql + strlen (sql),
+		    " ORDER BY mlen ASC, user_freq DESC, freq DESC, id ASC"
+		    " LIMIT %lu",
+		    max_candidates);
+      if (rc < 0)
+	goto out;
 #ifdef DEBUG
       fprintf (stderr, "%s\n", sql);
 #endif
