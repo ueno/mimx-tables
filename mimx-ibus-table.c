@@ -266,9 +266,13 @@ lookup (MPlist *args)
   if (!sql)
     goto out;
 
+  candidates = mplist ();
+  mt = mtext_dup (ic->preedit);
+  mplist_add (candidates, Mtext, mt);
+  m17n_object_unref (mt);
+
   /* issue query repeatedly until at least one candidates are found or
      the key length is exceeds MLEN */
-  candidates = mplist ();
   len = nbytes > MLEN ? MLEN : nbytes;
   wlen = MLEN - len + 1;
   for (xlen = 2; xlen <= wlen + 1; xlen++)
@@ -294,38 +298,28 @@ lookup (MPlist *args)
 	  if (rc != SQLITE_ROW)
 	    break;
 	  text = sqlite3_column_text (stmt, 1);
+#ifdef DEBUG
+	  fprintf (stderr, " %s\n", text);
+#endif
 	  mt = mconv_decode_buffer (Mcoding_utf_8, text,
 				    strlen ((const char *)text));
 	  mplist_add (candidates, Mtext, mt);
 	  m17n_object_unref (mt);
 	}
       sqlite3_finalize (stmt);
-      if (mplist_length (candidates) > 0)
+      if (mplist_length (candidates) > 1)
 	break;
     }
 
-  if (mplist_length (candidates) == 0)
-    goto out;
-
   actions = mplist ();
   add_action (actions, msymbol ("delete"), Msymbol,  msymbol ("@<"));
-  /* if there is only one matching, commit it immediately */
-  if (mplist_length (candidates) == 1)
-    {
-      add_action (actions, msymbol ("insert"),
-		  Mtext, mplist_value (candidates));
-      add_action (actions, msymbol ("commit"), Mnil, NULL);
-      m17n_object_unref (candidates);
-    }
-  else
-    {
-      plist = mplist_add (mplist (), Mplist, candidates);
-      m17n_object_unref (candidates);
-      mplist_add (actions, Mplist, plist);
-      m17n_object_unref (plist);
-      add_action (actions, msymbol ("show"), Mnil, NULL);
-      add_action (actions, msymbol ("shift"), Msymbol, select_state);
-    }
+
+  plist = mplist_add (mplist (), Mplist, candidates);
+  m17n_object_unref (candidates);
+  mplist_add (actions, Mplist, plist);
+  m17n_object_unref (plist);
+  add_action (actions, msymbol ("show"), Mnil, NULL);
+  add_action (actions, msymbol ("shift"), Msymbol, select_state);
 
  out:
   if (!actions)
