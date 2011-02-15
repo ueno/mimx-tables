@@ -69,16 +69,17 @@
   ((C-b) (select @-))
   ((Right) (select @+))
   ((C-f) (select @+))
-  ((Up) (select @\[))
-  ((C-p) (select @\[))
-  ((Down) (select @\]))
-  ((C-n) (select @\])))
+  ((Up) (select @-))
+  ((C-p) (select @-))
+  ((Down) (select @+))
+  ((C-n) (select @+)))
 
  (backspace
   ((BackSpace)))
 
  (commit-preedit
-  ((\ ))))
+  ((\ ))
+  ((Return))))
 
 (state
  (init
