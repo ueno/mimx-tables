@@ -207,7 +207,7 @@ lookup (MPlist *args)
 {
   MInputContext *ic;
   unsigned char buf[256];
-  MPlist *actions, *candidates, *plist;
+  MPlist *actions = NULL, *candidates, *plist;
   MSymbol init_state;
   MSymbol select_state;
   MText *mt;
@@ -236,37 +236,35 @@ lookup (MPlist *args)
   nbytes = mconv_encode_buffer (Mcoding_us_ascii, ic->preedit, buf, 256);
   context = get_context (ic);
 
-  actions = mplist ();
-
   if (!context->db) {
     rc = sqlite3_open_v2 (file, &context->db, SQLITE_OPEN_READONLY, NULL);
     if (rc) {
       sqlite3_close (context->db);
       context->db = NULL;
-      goto error;
+      goto out;
     }
   }
 
   buf[nbytes] = '\0';
   rc = encode_phrase ((const char *)buf, &m);
   if (rc)
-    goto error;
+    goto out;
   /* len(" AND mXX = XX") = 13 */
   msql = calloc (sizeof (char), 13 * nbytes + 1);
   if (!msql)
-    goto error;
+    goto out;
   offset = 0;
   for (i = 0; i < nbytes; i++)
     {
       rc = sprintf (msql + offset, " AND m%d = %d", i, m[i]);
       if (rc < 0)
-	goto error;
+	goto out;
       offset += rc;
     }
 
   sql = calloc (sizeof (char), 128 + strlen (msql) + 1);
   if (!sql)
-    goto error;
+    goto out;
 
   candidates = mplist ();
 
@@ -276,7 +274,7 @@ lookup (MPlist *args)
     rc = sprintf (sql, "SELECT id, phrase FROM phrases WHERE mlen < %lu",
 		  len + xlen);
     if (rc < 0)
-      goto error;
+      goto out;
     strcat (sql, msql);
     strcat (sql, " ORDER BY mlen ASC, user_freq DESC, freq DESC, id ASC");
 #ifdef DEBUG
@@ -284,7 +282,7 @@ lookup (MPlist *args)
 #endif
     rc = sqlite3_prepare (context->db, sql, strlen (sql), &stmt, NULL);
     if (rc != SQLITE_OK)
-      goto error;
+      goto out;
 
     while (1)
       {
@@ -305,22 +303,27 @@ lookup (MPlist *args)
   }
 
   if (mplist_length (candidates) == 0)
-    goto error;
-    
-  add_action (actions, msymbol ("delete"), Msymbol,  msymbol ("@<"));
-  plist = mplist_add (mplist (), Mplist, candidates);
-  m17n_object_unref (candidates);
-  mplist_add (actions, Mplist, plist);
-  m17n_object_unref (plist);
-  add_action (actions, msymbol ("show"), Mnil, NULL);
-  add_action (actions, msymbol ("shift"), Msymbol, select_state);
-  goto out;
+    goto out;
 
- error:
-  m17n_object_unref (actions);
-  actions = add_action (mplist (), msymbol ("shift"), Msymbol, init_state);
+  actions = mplist ();
+  add_action (actions, msymbol ("delete"), Msymbol,  msymbol ("@<"));
+  if (mplist_length (candidates) == 1) {
+    add_action (actions, msymbol ("insert"), Mtext, mplist_value (candidates));
+    add_action (actions, msymbol ("commit"), Mnil, NULL);
+    m17n_object_unref (candidates);
+  } else {
+    plist = mplist_add (mplist (), Mplist, candidates);
+    m17n_object_unref (candidates);
+    mplist_add (actions, Mplist, plist);
+    m17n_object_unref (plist);
+    add_action (actions, msymbol ("show"), Mnil, NULL);
+    add_action (actions, msymbol ("shift"), Msymbol, select_state);
+  }
 
  out:
+  if (!actions)
+    actions = add_action (mplist (), msymbol ("shift"), Msymbol, init_state);
+
   if (m)
     free (m);
   if (sql)
@@ -329,5 +332,6 @@ lookup (MPlist *args)
     free (msql);
   if (file)
     free (file);
+
   return actions;
 }
