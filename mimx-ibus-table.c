@@ -218,7 +218,7 @@ lookup (MPlist *args)
   char *sql = NULL, *msql = NULL;
   sqlite3_stmt *stmt;
   int offset, i, rc;
-  size_t len, xlen, wlen;
+  size_t len, xlen, wlen, mlen;
 
   ic = mplist_value (args);
   args = mplist_next (args);
@@ -245,6 +245,19 @@ lookup (MPlist *args)
     }
   }
 
+  sql = strdup ("SELECT val FROM ime WHERE attr = \"max_key_length\"");
+  rc = sqlite3_prepare (context->db, sql, strlen (sql), &stmt, NULL);
+  free (sql);
+  sql = NULL;
+  if (rc != SQLITE_OK)
+    goto out;
+  rc = sqlite3_step (stmt);
+  if (rc == SQLITE_ROW)
+    mlen = sqlite3_column_int (stmt, 0);
+  else
+    mlen = MLEN;
+  sqlite3_finalize (stmt);
+
   buf[nbytes] = '\0';
   rc = encode_phrase ((const char *)buf, &m);
   if (rc)
@@ -266,11 +279,15 @@ lookup (MPlist *args)
   if (!sql)
     goto out;
 
-  /* issue query repeatedly until at least one candidates are found or
-     the key length is exceeds MLEN */
   candidates = mplist ();
-  len = nbytes > MLEN ? MLEN : nbytes;
-  wlen = MLEN - len + 1;
+  mt = mtext_dup (ic->preedit);
+  mplist_add (candidates, Mtext, mt);
+  m17n_object_unref (mt);
+
+  /* issue query repeatedly until at least one candidates are found or
+     the key length is exceeds mlen */
+  len = nbytes > mlen ? mlen : nbytes;
+  wlen = mlen - len + 1;
   for (xlen = 2; xlen <= wlen + 1; xlen++)
     {
       rc = sprintf (sql, "SELECT id, phrase FROM phrases WHERE mlen < %lu",
@@ -294,38 +311,28 @@ lookup (MPlist *args)
 	  if (rc != SQLITE_ROW)
 	    break;
 	  text = sqlite3_column_text (stmt, 1);
+#ifdef DEBUG
+	  fprintf (stderr, " %s\n", text);
+#endif
 	  mt = mconv_decode_buffer (Mcoding_utf_8, text,
 				    strlen ((const char *)text));
 	  mplist_add (candidates, Mtext, mt);
 	  m17n_object_unref (mt);
 	}
       sqlite3_finalize (stmt);
-      if (mplist_length (candidates) > 0)
+      if (mplist_length (candidates) > 1)
 	break;
     }
 
-  if (mplist_length (candidates) == 0)
-    goto out;
-
   actions = mplist ();
   add_action (actions, msymbol ("delete"), Msymbol,  msymbol ("@<"));
-  /* if there is only one matching, commit it immediately */
-  if (mplist_length (candidates) == 1)
-    {
-      add_action (actions, msymbol ("insert"),
-		  Mtext, mplist_value (candidates));
-      add_action (actions, msymbol ("commit"), Mnil, NULL);
-      m17n_object_unref (candidates);
-    }
-  else
-    {
-      plist = mplist_add (mplist (), Mplist, candidates);
-      m17n_object_unref (candidates);
-      mplist_add (actions, Mplist, plist);
-      m17n_object_unref (plist);
-      add_action (actions, msymbol ("show"), Mnil, NULL);
-      add_action (actions, msymbol ("shift"), Msymbol, select_state);
-    }
+
+  plist = mplist_add (mplist (), Mplist, candidates);
+  m17n_object_unref (candidates);
+  mplist_add (actions, Mplist, plist);
+  m17n_object_unref (plist);
+  add_action (actions, msymbol ("show"), Mnil, NULL);
+  add_action (actions, msymbol ("shift"), Msymbol, select_state);
 
  out:
   if (!actions)

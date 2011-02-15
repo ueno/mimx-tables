@@ -12,3 +12,15 @@ $ mkdir -p ~/.m17n.d/
 $ cp latex.mim ~/.m17n.d/
 $ MDEBUG_INPUT=1 m17n-edit --im en-latex
 # type "\phi" and hit Tab, and you will see "φ"
+
+* Use with indic-typing-booster
+
+$ cp mr-*.mim ~/.m17n.d/
+$ git clone http://git.fedorahosted.org/git/indic-typing-booster.git
+$ cd indic-typing-booster/ibus-typing-booster
+$ ./autogen.sh
+$ make
+$ make install
+$ MDEBUG_INPUT=1 m17n-edit --im mr-inscript-typing-booster
+# type "Epgyepgne", and you will see the candidates are changing
+
