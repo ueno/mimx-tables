@@ -29,6 +29,9 @@
 #include <m17n.h>
 #include <sqlite3.h>
 
+#undef DEBUG
+#define MLEN 4			/* max key length */
+
 static const struct {
   int c, n;
 } phrase_dict[] = {
@@ -212,9 +215,10 @@ lookup (MPlist *args)
   char *file = NULL;
   int nbytes;
   int *m = NULL;
-  char *sql = NULL;
+  char *sql = NULL, *msql = NULL;
   sqlite3_stmt *stmt;
   int offset, i, rc;
+  size_t len, xlen, wlen;
 
   ic = mplist_value (args);
   args = mplist_next (args);
@@ -235,7 +239,7 @@ lookup (MPlist *args)
   actions = mplist ();
 
   if (!context->db) {
-    rc = sqlite3_open (file, &context->db);
+    rc = sqlite3_open_v2 (file, &context->db, SQLITE_OPEN_READONLY, NULL);
     if (rc) {
       sqlite3_close (context->db);
       context->db = NULL;
@@ -247,46 +251,58 @@ lookup (MPlist *args)
   rc = encode_phrase ((const char *)buf, &m);
   if (rc)
     goto error;
-
-  /* "SELECT * FROM phrases WHERE mlen < XX" = 37
-     " AND mXX = XX" = 13 */
-  sql = calloc (sizeof (char), 37 + 13 * nbytes + 1);
-  if (!sql)
+  /* len(" AND mXX = XX") = 13 */
+  msql = calloc (sizeof (char), 13 * nbytes + 1);
+  if (!msql)
     goto error;
-
   offset = 0;
-  rc = sprintf (sql, "SELECT id, phrase FROM phrases WHERE mlen >= %d", nbytes);
-  if (rc < 0)
-    goto error;
-  offset += rc;
   for (i = 0; i < nbytes; i++)
     {
-      rc = sprintf (sql + offset, " AND m%d = %d", i, m[i]);
+      rc = sprintf (msql + offset, " AND m%d = %d", i, m[i]);
       if (rc < 0)
 	goto error;
       offset += rc;
     }
 
-  rc = sqlite3_prepare (context->db, sql, strlen (sql), &stmt, NULL);
-  if (rc != SQLITE_OK)
+  sql = calloc (sizeof (char), 128 + strlen (msql) + 1);
+  if (!sql)
     goto error;
 
   candidates = mplist ();
-  while (1)
-    {
-      const unsigned char *text;
 
-      rc = sqlite3_step (stmt);
-      if (rc != SQLITE_ROW)
-	break;
+  len = nbytes > MLEN ? MLEN : nbytes;
+  wlen = MLEN - len + 1;
+  for (xlen = 2; xlen <= wlen + 1; xlen++) {
+    rc = sprintf (sql, "SELECT id, phrase FROM phrases WHERE mlen < %lu",
+		  len + xlen);
+    if (rc < 0)
+      goto error;
+    strcat (sql, msql);
+    strcat (sql, " ORDER BY mlen ASC, user_freq DESC, freq DESC, id ASC");
+#ifdef DEBUG
+    fprintf (stderr, "%s\n", sql);
+#endif
+    rc = sqlite3_prepare (context->db, sql, strlen (sql), &stmt, NULL);
+    if (rc != SQLITE_OK)
+      goto error;
 
-      text = sqlite3_column_text (stmt, 1);
-      mt = mconv_decode_buffer (Mcoding_utf_8, text,
-				strlen ((const char *)text));
-      mplist_add (candidates, Mtext, mt);
-      m17n_object_unref (mt);
-    }
-  sqlite3_finalize (stmt);
+    while (1)
+      {
+	const unsigned char *text;
+
+	rc = sqlite3_step (stmt);
+	if (rc != SQLITE_ROW)
+	  break;
+	text = sqlite3_column_text (stmt, 1);
+	mt = mconv_decode_buffer (Mcoding_utf_8, text,
+				  strlen ((const char *)text));
+	mplist_add (candidates, Mtext, mt);
+	m17n_object_unref (mt);
+      }
+    sqlite3_finalize (stmt);
+    if (mplist_length (candidates) > 0)
+      break;
+  }
 
   if (mplist_length (candidates) == 0)
     goto error;
@@ -309,6 +325,8 @@ lookup (MPlist *args)
     free (m);
   if (sql)
     free (sql);
+  if (msql)
+    free (msql);
   if (file)
     free (file);
   return actions;
