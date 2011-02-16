@@ -1,7 +1,7 @@
 AC_PREREQ(2.63)
 AC_CONFIG_MACRO_DIR([m4])
 
-AC_INIT([mimx-tables], [0.0.0], [ueno@unixuser.org])
+AC_INIT([mimx-table], [0.0.0], [ueno@unixuser.org])
 
 dnl Init automake
 AM_INIT_AUTOMAKE

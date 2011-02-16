@@ -1,4 +1,4 @@
-mimx-tables - an m17n-lib external module for reading ibus-tables
+mimx-table - an m17n-lib external module for reading ibus-table database
 
 NOTE: this module is proof-of-concept and has not yet reached a usable state
 
