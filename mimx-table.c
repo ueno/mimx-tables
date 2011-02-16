@@ -354,7 +354,7 @@ lookup_ibus (TableContext *context, MPlist *args)
 {
   unsigned char buf[256];
   char *word = NULL, *sql = NULL, *msql = NULL;
-  MPlist *candidates = mplist (), *pl;
+  MPlist *candidates = mplist ();
   size_t len, xlen, wlen, mlen;
   int i, rc;
   int *m = NULL;
@@ -421,7 +421,7 @@ lookup_ibus (TableContext *context, MPlist *args)
 	  goto out;
 	}
 
-      for (i = 0, pl = mplist (); sqlite3_step (stmt) == SQLITE_ROW; i++)
+      while (sqlite3_step (stmt) == SQLITE_ROW)
 	{
 	  const unsigned char *text;
 
@@ -430,19 +430,10 @@ lookup_ibus (TableContext *context, MPlist *args)
 	  fprintf (stderr, " %s\n", text);
 #endif
 	  mt = mtext_from_utf8 (context, text, strlen ((const char *)text));
-	  mplist_add (pl, Mtext, mt);
+	  mplist_add (candidates, Mtext, mt);
 	  m17n_object_unref (mt);
-	  if (i % 10 == 9)
-	    {
-	      mplist_add (candidates, Mplist, pl);
-	      m17n_object_unref (pl);
-	      pl = mplist ();
-	    }
 	}
       sqlite3_finalize (stmt);
-      if (mplist_key (pl) != Mnil)
-	mplist_add (candidates, Mplist, pl);
-      m17n_object_unref (pl);
       if (mplist_length (candidates) > 0)
 	break;
     }
@@ -460,14 +451,38 @@ lookup_ibus (TableContext *context, MPlist *args)
   return candidates;
 }
 
+static MPlist *
+paginate (MPlist *candidates)
+{
+  MPlist *p = candidates, *pl = mplist (), *plist = mplist ();
+  int i;
+
+  for (i = 0; mplist_key (p) == Mtext; p = mplist_next (p), i++)
+    {
+      mplist_add (pl, Mtext, mplist_value (p));
+      if (i % 10 == 9)
+	{
+	  mplist_add (plist, Mplist, pl);
+	  m17n_object_unref (pl);
+	  pl = mplist ();
+	}
+    }
+
+  if (mplist_key (pl) != Mnil)
+    mplist_add (plist, Mplist, pl);
+  m17n_object_unref (pl);
+  return plist;
+}
+
 MPlist *
 lookup (MPlist *args)
 {
   MInputContext *ic;
-  MPlist *actions = NULL, *candidates;
+  MPlist *actions = NULL, *candidates, *plist;
   MSymbol init_state;
   MSymbol select_state;
   TableContext *context;
+  MText *mt;
 
   ic = mplist_value (args);
   context = get_context (ic);
@@ -482,17 +497,16 @@ lookup (MPlist *args)
   else
     candidates = mplist ();
 
-  if (mplist_length (candidates) == 0)
-    {
-      m17n_object_unref (candidates);
-      return add_action (mplist (), msymbol ("shift"), Msymbol, init_state);
-    }
+  mt = mtext_dup (ic->preedit);
+  mplist_push (candidates, Mtext, mt);
+  m17n_object_unref (mt);
+  plist = paginate (candidates);
+  m17n_object_unref (candidates);
 
   actions = mplist ();
   add_action (actions, msymbol ("delete"), Msymbol,  msymbol ("@<"));
-
-  mplist_add (actions, Mplist, candidates);
-  m17n_object_unref (candidates);
+  mplist_add (actions, Mplist, plist);
+  m17n_object_unref (plist);
   add_action (actions, msymbol ("show"), Mnil, NULL);
   add_action (actions, msymbol ("shift"), Msymbol, select_state);
 

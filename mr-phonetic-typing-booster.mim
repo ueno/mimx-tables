@@ -31,10 +31,6 @@
 (module
  (libmimx-table open lookup init fini))
 
-(macro
- (lookup
-  (call libmimx-table lookup init select)))
-
 (map
  (alpha
   ("A" "A") ("B" "B") ("C" "C") ("D" "D") ("E" "E") ("F" "F") ("G" "G")
@@ -68,10 +64,10 @@
   ((C-b) (select @-))
   ((Right) (select @+))
   ((C-f) (select @+))
-  ((Up) (select @-))
-  ((C-p) (select @-))
-  ((Down) (select @+))
-  ((C-n) (select @+)))
+  ((Up) (select @\[))
+  ((C-p) (select @\[))
+  ((Down) (select @\]))
+  ((C-n) (select @\])))
 
  (backspace
   ((BackSpace)))
@@ -80,23 +76,26 @@
   ((\ ))
   ((Return))))
 
+(macro
+ (lookup
+  (set K @@) (sub K 1) (call libmimx-table lookup alpha select)))
+
 (state
  (init
   (nil (call libmimx-table open ibus
 	     "/usr/share/ibus-table/tables/marathi-phonetic.db"
 	     5 100))
-  (alpha (shift alpha)))
+  (alpha (lookup)))
 
  (alpha
   (alpha (lookup)))
 
  (select
-  (t (set K @@) (sub K 1))
   (choose (hide) (shift init))
   (change-candidate)
   (backspace (undo K))
   (commit-preedit (shift init))
-  (alpha (lookup) (shift select))))
+  (alpha (lookup))))
 
 ;; Local Variables:
 ;; mode: lisp
