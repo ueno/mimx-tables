@@ -354,7 +354,7 @@ lookup_ibus (TableContext *context, MPlist *args)
 {
   unsigned char buf[256];
   char *word = NULL, *sql = NULL, *msql = NULL;
-  MPlist *candidates = mplist ();
+  MPlist *candidates = mplist (), *pl;
   size_t len, xlen, wlen, mlen;
   int i, rc;
   int *m = NULL;
@@ -421,22 +421,28 @@ lookup_ibus (TableContext *context, MPlist *args)
 	  goto out;
 	}
 
-      while (1)
+      for (i = 0, pl = mplist (); sqlite3_step (stmt) == SQLITE_ROW; i++)
 	{
 	  const unsigned char *text;
 
-	  rc = sqlite3_step (stmt);
-	  if (rc != SQLITE_ROW)
-	    break;
 	  text = sqlite3_column_text (stmt, 1);
 #ifdef DEBUG
 	  fprintf (stderr, " %s\n", text);
 #endif
 	  mt = mtext_from_utf8 (context, text, strlen ((const char *)text));
-	  mplist_add (candidates, Mtext, mt);
+	  mplist_add (pl, Mtext, mt);
 	  m17n_object_unref (mt);
+	  if (i % 10 == 9)
+	    {
+	      mplist_add (candidates, Mplist, pl);
+	      m17n_object_unref (pl);
+	      pl = mplist ();
+	    }
 	}
       sqlite3_finalize (stmt);
+      if (mplist_key (pl) != Mnil)
+	mplist_add (candidates, Mplist, pl);
+      m17n_object_unref (pl);
       if (mplist_length (candidates) > 0)
 	break;
     }
@@ -458,10 +464,9 @@ MPlist *
 lookup (MPlist *args)
 {
   MInputContext *ic;
-  MPlist *actions = NULL, *candidates, *plist;
+  MPlist *actions = NULL, *candidates;
   MSymbol init_state;
   MSymbol select_state;
-  MText *mt;
   TableContext *context;
 
   ic = mplist_value (args);
@@ -483,17 +488,11 @@ lookup (MPlist *args)
       return add_action (mplist (), msymbol ("shift"), Msymbol, init_state);
     }
 
-  mt = mtext_dup (ic->preedit);
-  mplist_push (candidates, Mtext, mt);
-  m17n_object_unref (mt);
-
   actions = mplist ();
   add_action (actions, msymbol ("delete"), Msymbol,  msymbol ("@<"));
 
-  plist = mplist_add (mplist (), Mplist, candidates);
+  mplist_add (actions, Mplist, candidates);
   m17n_object_unref (candidates);
-  mplist_add (actions, Mplist, plist);
-  m17n_object_unref (plist);
   add_action (actions, msymbol ("show"), Mnil, NULL);
   add_action (actions, msymbol ("shift"), Msymbol, select_state);
 
