@@ -30,7 +30,7 @@
 #include <m17n.h>
 #include <sqlite3.h>
 
-#define DEBUG 1
+#undef DEBUG
 #define MLEN 4			/* max key length */
 
 static const struct {
@@ -262,19 +262,9 @@ get_ime_attr_int (TableContext *context, const char *attr)
   char *sql;
   int retval = -1, rc;
 
-  /* strlen("SELECT val FROM ime WHERE attr = \"\"") = 35 */
-  sql = calloc (sizeof (char), 35 + strlen (attr) + 1);
-  if (!sql)
-    return -1;
-  rc = sprintf (sql, "SELECT val FROM ime WHERE attr = \"%s\"", attr);
-  if (rc < 0)
-    {
-      free (sql);
-      return -1;
-    }
+  sql = sqlite3_mprintf ("SELECT val FROM ime WHERE attr = \"%q\"", attr);
   rc = sqlite3_prepare (context->db, sql, strlen (sql), &stmt, NULL);
-  free (sql);
-  sql = NULL;
+  sqlite3_free (sql);
   if (rc != SQLITE_OK)
     {
       sqlite3_finalize (stmt);
@@ -366,7 +356,7 @@ lookup_ibus (TableContext *context, MPlist *args)
   char *word = NULL, *sql = NULL, *msql = NULL;
   MPlist *candidates = mplist ();
   size_t len, xlen, wlen, mlen;
-  int offset, i, rc;
+  int i, rc;
   int *m = NULL;
   sqlite3_stmt *stmt;
   MText *mt;
@@ -394,13 +384,11 @@ lookup_ibus (TableContext *context, MPlist *args)
   msql = calloc (sizeof (char), 13 * len + 1);
   if (!msql)
     goto out;
-  offset = 0;
   for (i = 0; i < len; i++)
     {
-      rc = sprintf (msql + offset, " AND m%d = %d", i, m[i]);
-      if (rc < 0)
-	goto out;
-      offset += rc;
+      char s[14];
+      sqlite3_snprintf (13, s, " AND m%d = %d", i, m[i]);
+      strcat (msql, s);
     }
 
   sql = calloc (sizeof (char), 128 + strlen (msql) + 1);
@@ -413,17 +401,16 @@ lookup_ibus (TableContext *context, MPlist *args)
   wlen = mlen - len + 1;
   for (; xlen <= wlen + 1; xlen++)
     {
-      rc = sprintf (sql, "SELECT id, phrase FROM phrases WHERE mlen < %lu",
-		    len + xlen);
-      if (rc < 0)
-	goto out;
+      sqlite3_snprintf (128,
+			sql,
+			"SELECT id, phrase FROM phrases WHERE mlen < %lu",
+			len + xlen);
       strcat (sql, msql);
-      rc = sprintf (sql + strlen (sql),
-		    " ORDER BY mlen ASC, user_freq DESC, freq DESC, id ASC"
-		    " LIMIT %lu",
-		    context->max_candidates);
-      if (rc < 0)
-	goto out;
+      sqlite3_snprintf (128,
+			sql + strlen (sql),
+			" ORDER BY mlen ASC, user_freq DESC, freq DESC, id ASC"
+			" LIMIT %lu",
+			context->max_candidates);
 #ifdef DEBUG
       fprintf (stderr, "%s\n", sql);
 #endif
