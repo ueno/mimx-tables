@@ -29,11 +29,11 @@
 (title "क")
 
 (module
- (libmimx-ibus-table lookup init fini))
+ (libmimx-table lookup init fini))
 
 (macro
  (lookup
-  (call libmimx-ibus-table lookup init select
+  (call libmimx-table lookup init select ibus
 	"/usr/share/ibus-table/tables/marathi-phonetic.db"
 	5 100)))
 

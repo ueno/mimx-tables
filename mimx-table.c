@@ -26,10 +26,11 @@
 #include <assert.h>
 #include <string.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <m17n.h>
 #include <sqlite3.h>
 
-#undef DEBUG
+#define DEBUG 1
 #define MLEN 4			/* max key length */
 
 static const struct {
@@ -61,13 +62,15 @@ static int phrase_enc_dict[128];
 static int phrase_dec_dict[128];
 
 struct _TableContext {
+  char *word;
   sqlite3 *db;
+  MPlist *args;
   MInputContext *ic;
   MConverter *converter;
 };
 typedef struct _TableContext TableContext;
 
-static MSymbol Mtable;
+static MSymbol Mtable, Mibus;
 static int initialized = 0;
 
 static void
@@ -179,6 +182,7 @@ init (MPlist *args)
     {
       init_phrase_dict ();
       Mtable = msymbol (" table");
+      Mibus = msymbol ("ibus");
     }
 
   context = calloc (sizeof (TableContext), 1);
@@ -261,46 +265,28 @@ get_ime_attr_int (TableContext *context, const char *attr)
   return retval;
 }
 
-MPlist *
-lookup (MPlist *args)
+static MPlist *
+lookup_ibus (TableContext *context)
 {
-  MInputContext *ic;
   unsigned char buf[256];
-  MPlist *actions = NULL, *candidates, *plist;
-  MSymbol init_state;
-  MSymbol select_state;
-  MText *mt;
-  TableContext *context;
-  char *file = NULL;
-  int nbytes;
-  int *m = NULL;
-  char *sql = NULL, *msql = NULL;
-  sqlite3_stmt *stmt;
-  int offset, i, rc;
+  char *file = NULL, *sql = NULL, *msql = NULL;
+  MPlist *args = context->args;
+  MPlist *candidates = mplist ();
   size_t len, xlen, wlen, mlen, max_candidates;
+  int offset, i, rc;
+  int *m = NULL;
+  sqlite3_stmt *stmt;
+  MText *mt;
 
-  ic = mplist_value (args);
-  context = get_context (ic);
-
-  args = mplist_next (args);
-  init_state = (MSymbol) mplist_value (args);
-  args = mplist_next (args);
-  select_state = (MSymbol) mplist_value (args);
-
-  args = mplist_next (args);
   mt = (MText *) mplist_value (args);
-  nbytes = mtext_to_utf8 (context, mt, buf, sizeof (buf));
-
+  rc = mtext_to_utf8 (context, mt, buf, sizeof (buf));
+  if (rc < 0)
+    goto out;
   file = strdup ((const char *)buf);
-
   args = mplist_next (args);
   xlen = (long) mplist_value (args);
-
   args = mplist_next (args);
   max_candidates = (long) mplist_value (args);
-
-  args = mplist_next (args);
-  nbytes = mtext_to_utf8 (context, ic->preedit, buf, sizeof (buf));
 
   if (!context->db)
     {
@@ -317,15 +303,19 @@ lookup (MPlist *args)
   if (mlen < 0)
     mlen = MLEN;
 
-  rc = encode_phrase ((const unsigned char *)buf, &m);
+  rc = encode_phrase ((const unsigned char *)context->word, &m);
   if (rc)
     goto out;
-  /* len(" AND mXX = XX") = 13 */
-  msql = calloc (sizeof (char), 13 * nbytes + 1);
+
+  /* strlen(" AND mXX = XX") = 13 */
+  len = strlen (context->word);
+  if (len > mlen)
+    len = mlen;
+  msql = calloc (sizeof (char), 13 * len + 1);
   if (!msql)
     goto out;
   offset = 0;
-  for (i = 0; i < nbytes; i++)
+  for (i = 0; i < len; i++)
     {
       rc = sprintf (msql + offset, " AND m%d = %d", i, m[i]);
       if (rc < 0)
@@ -337,14 +327,8 @@ lookup (MPlist *args)
   if (!sql)
     goto out;
 
-  candidates = mplist ();
-  mt = mtext_dup (ic->preedit);
-  mplist_add (candidates, Mtext, mt);
-  m17n_object_unref (mt);
-
   /* issue query repeatedly until at least one candidates are found or
      the key length is exceeds mlen */
-  len = nbytes > mlen ? mlen : nbytes;
   wlen = mlen - len + 1;
   for (; xlen <= wlen + 1; xlen++)
     {
@@ -364,7 +348,10 @@ lookup (MPlist *args)
 #endif
       rc = sqlite3_prepare (context->db, sql, strlen (sql), &stmt, NULL);
       if (rc != SQLITE_OK)
-	goto out;
+	{
+	  sqlite3_finalize (stmt);
+	  goto out;
+	}
 
       while (1)
 	{
@@ -382,9 +369,66 @@ lookup (MPlist *args)
 	  m17n_object_unref (mt);
 	}
       sqlite3_finalize (stmt);
-      if (mplist_length (candidates) > 1)
+      if (mplist_length (candidates) > 0)
 	break;
     }
+
+ out:
+  if (file)
+    free (file);
+  if (m)
+    free (m);
+  if (sql)
+    free (sql);
+  if (msql)
+    free (msql);
+
+  return candidates;
+}
+
+MPlist *
+lookup (MPlist *args)
+{
+  MInputContext *ic;
+  unsigned char buf[256];
+  MPlist *actions = NULL, *candidates, *plist;
+  MSymbol init_state;
+  MSymbol select_state;
+  MSymbol table_type;
+  MText *mt;
+  TableContext *context;
+  int rc;
+
+  ic = mplist_value (args);
+  context = get_context (ic);
+
+  args = mplist_next (args);
+  init_state = (MSymbol) mplist_value (args);
+  args = mplist_next (args);
+  select_state = (MSymbol) mplist_value (args);
+  args = mplist_next (args);
+  table_type = (MSymbol) mplist_value (args);
+
+  context->args = mplist_next (args);
+  rc = mtext_to_utf8 (context, ic->preedit, buf, sizeof (buf));
+  if (rc < 0)
+    return add_action (mplist (), msymbol ("shift"), Msymbol, init_state);
+  context->word = strdup ((const char *)buf);
+
+  if (table_type == Mibus)
+    candidates = lookup_ibus (context);
+  else
+    candidates = mplist ();
+
+  if (mplist_length (candidates) == 0)
+    {
+      m17n_object_unref (candidates);
+      return add_action (mplist (), msymbol ("shift"), Msymbol, init_state);
+    }
+
+  mt = mtext_dup (ic->preedit);
+  mplist_push (candidates, Mtext, mt);
+  m17n_object_unref (mt);
 
   actions = mplist ();
   add_action (actions, msymbol ("delete"), Msymbol,  msymbol ("@<"));
@@ -395,19 +439,6 @@ lookup (MPlist *args)
   m17n_object_unref (plist);
   add_action (actions, msymbol ("show"), Mnil, NULL);
   add_action (actions, msymbol ("shift"), Msymbol, select_state);
-
- out:
-  if (!actions)
-    actions = add_action (mplist (), msymbol ("shift"), Msymbol, init_state);
-
-  if (m)
-    free (m);
-  if (sql)
-    free (sql);
-  if (msql)
-    free (msql);
-  if (file)
-    free (file);
 
   return actions;
 }
