@@ -29,13 +29,11 @@
 (title "क")
 
 (module
- (libmimx-table lookup init fini))
+ (libmimx-table open lookup init fini))
 
 (macro
  (lookup
-  (call libmimx-table lookup init select ibus
-	"/usr/share/ibus-table/tables/marathi-inscript.db"
-	5 100)))
+  (call libmimx-table lookup init select)))
 
 (map
  (alpha
@@ -84,6 +82,9 @@
 
 (state
  (init
+  (nil (call libmimx-table open ibus
+	     "/usr/share/ibus-table/tables/marathi-inscript.db"
+	     5 100))
   (alpha (lookup) (shift alpha)))
 
  (alpha

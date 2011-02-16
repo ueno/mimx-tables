@@ -29,7 +29,7 @@
 (title "LaTeX")
 
 (module
- (libmimx-table lookup init fini))
+ (libmimx-table open lookup init fini))
 
 (map
  (alpha
@@ -47,8 +47,7 @@
   ("}" "}") ("|" "|") ("/" "/") (":" ":") ("\"" "\"") ("<" "<") (">" ">")
   ("," ",") ("." ".") ("?" "?") ("\\" "\\"))
  (lookup
-  ((Tab) (call libmimx-table lookup init select ibus
-	       "/usr/share/ibus-table/tables/latex.db" 2 100)))
+  ((Tab) (call libmimx-table lookup init select)))
 
  (change
   ((Left) (select @-))
@@ -56,6 +55,9 @@
 
 (state
  (init
+  (nil (call libmimx-table open ibus
+	     "/usr/share/ibus-table/tables/latex.db"
+	     2 100))
   (alpha (shift alpha)))
 
  (alpha

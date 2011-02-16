@@ -1,4 +1,4 @@
-/* mimx-ibus-table.c -- ibus-table input method external module for m17n-lib
+/* mimx-table.c -- ibus-table input method external module for m17n-lib
  * Copyright (C) 2011 Daiki Ueno <ueno@unixuser.org>
  * Copyright (C) 2011 Red Hat, Inc.
  * Copyright (C) 2003, 2004
@@ -62,11 +62,15 @@ static int phrase_enc_dict[128];
 static int phrase_dec_dict[128];
 
 struct _TableContext {
-  char *word;
-  sqlite3 *db;
-  MPlist *args;
+  MSymbol type;
   MInputContext *ic;
   MConverter *converter;
+
+  /* ibus-table */
+  char *file;
+  sqlite3 *db;
+  size_t xlen;
+  size_t max_candidates;
 };
 typedef struct _TableContext TableContext;
 
@@ -205,6 +209,7 @@ fini (MPlist *args)
       if (context->db)
 	sqlite3_close (context->db);
       mconv_free_converter (context->converter);
+      free (context->file);
       free (context);
     }
   return NULL;
@@ -265,28 +270,31 @@ get_ime_attr_int (TableContext *context, const char *attr)
   return retval;
 }
 
-static MPlist *
-lookup_ibus (TableContext *context)
+static void
+open_ibus (TableContext *context, MPlist *args)
 {
-  unsigned char buf[256];
-  char *file = NULL, *sql = NULL, *msql = NULL;
-  MPlist *args = context->args;
-  MPlist *candidates = mplist ();
-  size_t len, xlen, wlen, mlen, max_candidates;
-  int offset, i, rc;
-  int *m = NULL;
-  sqlite3_stmt *stmt;
   MText *mt;
+  int rc;
+  char *file = NULL;
+  unsigned char buf[256];
 
   mt = (MText *) mplist_value (args);
   rc = mtext_to_utf8 (context, mt, buf, sizeof (buf));
   if (rc < 0)
-    goto out;
+    return;
   file = strdup ((const char *)buf);
   args = mplist_next (args);
-  xlen = (long) mplist_value (args);
+  context->xlen = (long) mplist_value (args);
   args = mplist_next (args);
-  max_candidates = (long) mplist_value (args);
+  context->max_candidates = (long) mplist_value (args);
+
+  if (context->db && context->file && strcmp (context->file, file) != 0)
+    {
+      sqlite3_close (context->db);
+      context->db = NULL;
+      free (context->file);
+    }
+  context->file = file;
 
   if (!context->db)
     {
@@ -295,20 +303,61 @@ lookup_ibus (TableContext *context)
 	{
 	  sqlite3_close (context->db);
 	  context->db = NULL;
-	  goto out;
+	  free (context->file);
+	  context->file = NULL;
 	}
     }
+}
+
+MPlist *
+open (MPlist *args)
+{
+  MInputContext *ic;
+  TableContext *context;
+
+  ic = mplist_value (args);
+  context = get_context (ic);
+
+  args = mplist_next (args);
+  context->type = (MSymbol) mplist_value (args);
+
+  args = mplist_next (args);
+  if (context->type == Mibus)
+    open_ibus (context, args);
+
+  return NULL;
+}
+
+static MPlist *
+lookup_ibus (TableContext *context, MPlist *args)
+{
+  unsigned char buf[256];
+  char *word = NULL, *sql = NULL, *msql = NULL;
+  MPlist *candidates = mplist ();
+  size_t len, xlen, wlen, mlen;
+  int offset, i, rc;
+  int *m = NULL;
+  sqlite3_stmt *stmt;
+  MText *mt;
+
+  if (!context->db)
+    goto out;
+
+  rc = mtext_to_utf8 (context, context->ic->preedit, buf, sizeof (buf));
+  if (rc < 0)
+    goto out;
+  word = strdup ((const char *)buf);
+  len = rc;
 
   mlen = get_ime_attr_int (context, "max_key_length");
   if (mlen < 0)
     mlen = MLEN;
 
-  rc = encode_phrase ((const unsigned char *)context->word, &m);
+  rc = encode_phrase ((const unsigned char *)word, &m);
   if (rc)
     goto out;
 
   /* strlen(" AND mXX = XX") = 13 */
-  len = strlen (context->word);
   if (len > mlen)
     len = mlen;
   msql = calloc (sizeof (char), 13 * len + 1);
@@ -329,6 +378,7 @@ lookup_ibus (TableContext *context)
 
   /* issue query repeatedly until at least one candidates are found or
      the key length is exceeds mlen */
+  xlen = context->xlen;
   wlen = mlen - len + 1;
   for (; xlen <= wlen + 1; xlen++)
     {
@@ -340,7 +390,7 @@ lookup_ibus (TableContext *context)
       rc = sprintf (sql + strlen (sql),
 		    " ORDER BY mlen ASC, user_freq DESC, freq DESC, id ASC"
 		    " LIMIT %lu",
-		    max_candidates);
+		    context->max_candidates);
       if (rc < 0)
 	goto out;
 #ifdef DEBUG
@@ -374,8 +424,8 @@ lookup_ibus (TableContext *context)
     }
 
  out:
-  if (file)
-    free (file);
+  if (word)
+    free (word);
   if (m)
     free (m);
   if (sql)
@@ -390,14 +440,11 @@ MPlist *
 lookup (MPlist *args)
 {
   MInputContext *ic;
-  unsigned char buf[256];
   MPlist *actions = NULL, *candidates, *plist;
   MSymbol init_state;
   MSymbol select_state;
-  MSymbol table_type;
   MText *mt;
   TableContext *context;
-  int rc;
 
   ic = mplist_value (args);
   context = get_context (ic);
@@ -406,17 +453,9 @@ lookup (MPlist *args)
   init_state = (MSymbol) mplist_value (args);
   args = mplist_next (args);
   select_state = (MSymbol) mplist_value (args);
-  args = mplist_next (args);
-  table_type = (MSymbol) mplist_value (args);
 
-  context->args = mplist_next (args);
-  rc = mtext_to_utf8 (context, ic->preedit, buf, sizeof (buf));
-  if (rc < 0)
-    return add_action (mplist (), msymbol ("shift"), Msymbol, init_state);
-  context->word = strdup ((const char *)buf);
-
-  if (table_type == Mibus)
-    candidates = lookup_ibus (context);
+  if (context->type == Mibus)
+    candidates = lookup_ibus (context, args);
   else
     candidates = mplist ();
 
