@@ -61,8 +61,18 @@ static const struct {
 static int phrase_enc_dict[128];
 static int phrase_dec_dict[128];
 
+typedef struct _TableContext TableContext;
+typedef MPlist *(*TableFunc) (TableContext *context, MPlist *args);
+
+struct _TableDescription {
+  const char *name;
+  TableFunc open;
+  TableFunc lookup;
+};
+typedef struct _TableDescription TableDescription;
+
 struct _TableContext {
-  MSymbol type;
+  const TableDescription *desc;
   MInputContext *ic;
   MConverter *converter;
 
@@ -72,7 +82,15 @@ struct _TableContext {
   size_t xlen;
   size_t max_candidates;
 };
-typedef struct _TableContext TableContext;
+
+static MPlist *open_ibus (TableContext *context, MPlist *args);
+static MPlist *lookup_ibus (TableContext *context, MPlist *args);
+
+static const TableDescription table_descriptions[] =
+  {
+    { "ibus", open_ibus, lookup_ibus },
+    { NULL }
+  };
 
 static MSymbol Mtable, Mibus;
 static int initialized = 0;
@@ -270,7 +288,7 @@ get_ime_attr_int (TableContext *context, const char *attr)
   return retval;
 }
 
-static void
+static MPlist *
 open_ibus (TableContext *context, MPlist *args)
 {
   MText *mt;
@@ -281,7 +299,7 @@ open_ibus (TableContext *context, MPlist *args)
   mt = (MText *) mplist_value (args);
   rc = mtext_to_utf8 (context, mt, buf, sizeof (buf));
   if (rc < 0)
-    return;
+    return NULL;
   file = strdup ((const char *)buf);
   args = mplist_next (args);
   context->xlen = (long) mplist_value (args);
@@ -307,6 +325,8 @@ open_ibus (TableContext *context, MPlist *args)
 	  context->file = NULL;
 	}
     }
+
+  return NULL;
 }
 
 MPlist *
@@ -314,16 +334,27 @@ open (MPlist *args)
 {
   MInputContext *ic;
   TableContext *context;
+  MSymbol type;
+  int i;
 
   ic = mplist_value (args);
   context = get_context (ic);
 
   args = mplist_next (args);
-  context->type = (MSymbol) mplist_value (args);
-
+  type = (MSymbol) mplist_value (args);
   args = mplist_next (args);
-  if (context->type == Mibus)
-    open_ibus (context, args);
+
+  for (i = 0;
+       i < sizeof (table_descriptions) / sizeof (*table_descriptions);
+       i++)
+    if (strcmp (table_descriptions[i].name, msymbol_name (type)) == 0)
+      {
+	context->desc = &table_descriptions[i];
+	break;
+      }
+
+  if (context->desc)
+    (*context->desc->open) (context, args);
 
   return NULL;
 }
@@ -454,8 +485,8 @@ lookup (MPlist *args)
   args = mplist_next (args);
   select_state = (MSymbol) mplist_value (args);
 
-  if (context->type == Mibus)
-    candidates = lookup_ibus (context, args);
+  if (context->desc)
+    candidates = (*context->desc->lookup) (context, args);
   else
     candidates = mplist ();
 
