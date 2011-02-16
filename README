@@ -24,3 +24,9 @@ $ make install
 $ MDEBUG_INPUT=1 m17n-edit --im mr-inscript-typing-booster
 # type "Epgyepgne", and you will see the candidates are changing
 
+* Use with scim-tables (experimental)
+
+change the "open" calls to libmimx-table in MIM something like:
+
+(call libmimx-table open scim
+      "/usr/share/scim/tables/marathi-inscript.bin")

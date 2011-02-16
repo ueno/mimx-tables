@@ -1,4 +1,4 @@
-/* mimx-table.c -- ibus-table input method external module for m17n-lib
+/* mimx-table.c -- table input method external module for m17n-lib
  * Copyright (C) 2011 Daiki Ueno <ueno@unixuser.org>
  * Copyright (C) 2011 Red Hat, Inc.
  * Copyright (C) 2003, 2004
@@ -27,6 +27,9 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <stdint.h>
+#include <sys/mman.h>
+
 #include <m17n.h>
 #include <sqlite3.h>
 
@@ -71,6 +74,12 @@ struct _TableDescription {
 };
 typedef struct _TableDescription TableDescription;
 
+struct _TableOffsetArray {
+  int cap, len;
+  int *data;
+};
+typedef struct _TableOffsetArray TableOffsetArray;
+
 struct _TableContext {
   const TableDescription *desc;
   MInputContext *ic;
@@ -79,20 +88,32 @@ struct _TableContext {
   /* ibus-table */
   char *file;
   sqlite3 *db;
-  size_t xlen;
-  size_t max_candidates;
+  int xlen;
+  int max_candidates;
+
+  /* scim-tables */
+  FILE *fp;
+  void *mem;
+  size_t memlen;
+  int max_key_length;
+  unsigned char *content;
+  int content_size;
+  TableOffsetArray *offsets;
 };
 
 static MPlist *open_ibus (TableContext *context, MPlist *args);
 static MPlist *lookup_ibus (TableContext *context, MPlist *args);
+static MPlist *open_scim (TableContext *context, MPlist *args);
+static MPlist *lookup_scim (TableContext *context, MPlist *args);
 
 static const TableDescription table_descriptions[] =
   {
     { "ibus", open_ibus, lookup_ibus },
+    { "scim", open_scim, lookup_scim },
     { NULL }
   };
 
-static MSymbol Mtable, Mibus;
+static MSymbol Mtable, Mibus, Mscim;
 static int initialized = 0;
 
 static void
@@ -205,6 +226,7 @@ init (MPlist *args)
       init_phrase_dict ();
       Mtable = msymbol (" table");
       Mibus = msymbol ("ibus");
+      Mscim = msymbol ("scim");
     }
 
   context = calloc (sizeof (TableContext), 1);
@@ -227,6 +249,13 @@ fini (MPlist *args)
       if (context->db)
 	sqlite3_close (context->db);
       mconv_free_converter (context->converter);
+      if (context->mem)
+	munmap (context->mem, context->memlen);
+      if (context->fp)
+	{
+	  fclose (context->fp);
+	  context->fp = NULL;
+	}
       free (context->file);
       free (context);
     }
@@ -319,6 +348,139 @@ open_ibus (TableContext *context, MPlist *args)
   return NULL;
 }
 
+#define BUFSIZE 4096
+
+static inline uint32_t
+scim_bytestouint32 (const unsigned char *bytes)
+{
+    return  ((uint32_t) bytes[0])
+            | (((uint32_t) bytes[1]) << 8)
+            | (((uint32_t) bytes[2]) << 16)
+            | (((uint32_t) bytes[3]) << 24);
+}
+
+static MPlist *
+open_scim (TableContext *context, MPlist *args)
+{
+  MText *mt;
+  int rc;
+  char *file = NULL;
+  unsigned char buf[BUFSIZE];
+
+  mt = (MText *) mplist_value (args);
+  rc = mtext_to_utf8 (context, mt, buf, sizeof (buf));
+  if (rc < 0)
+    return NULL;
+  file = strdup ((const char *)buf);
+
+  if (context->mem && context->file && strcmp (context->file, file) != 0)
+    {
+      munmap (context->mem, context->memlen);
+      context->mem = NULL;
+      free (context->file);
+      if (context->fp)
+	{
+	  fclose (context->fp);
+	  context->fp = NULL;
+	}
+    }
+
+  if (!context->fp)
+    context->fp = fopen (file, "rb");
+
+  if (!context->mem)
+    {
+      while (1)
+	{
+	  if (!fgets ((char *)buf, sizeof buf, context->fp))
+	    break;
+	  if (strncmp ("###", (const char *)buf, 3) == 0)
+	    continue;
+	  if (strncmp ("BEGIN_TABLE", (const char *)buf, 11) == 0)
+	    {
+	      long start_pos, end_pos;
+
+	      if (fread (buf, 4, 1, context->fp) != 1)
+		break;
+	      context->content_size = scim_bytestouint32 (buf);
+	      start_pos = ftell (context->fp);
+	      if (fseek (context->fp, 0, SEEK_END) < 0)
+		break;
+	      end_pos = ftell (context->fp);
+	      if (context->content_size >= end_pos - start_pos)
+		break;
+	      context->mem = mmap (0, end_pos, PROT_READ, MAP_PRIVATE,
+				   fileno (context->fp), 0);
+	      context->memlen = end_pos;
+	      if (context->mem)
+		{
+		  context->content = (unsigned char *)context->mem + start_pos;
+		  context->file = file;
+		}
+	      break;
+	    }
+	}
+    }
+
+  if (!context->mem)
+    {
+      free (file);
+      return NULL;
+    }
+
+  if (!context->offsets)
+    {
+      int offset, max_key_length = 0;
+      for (offset = 0; offset < context->content_size;)
+	{
+	  int klen = context->content[offset] & 0x3F;
+	  int plen = context->content[offset + 1];
+
+	  if ((context->content[offset] & 0x80) != 0 && klen > max_key_length)
+	    max_key_length = klen;
+	  offset += klen + plen + 6;
+	}
+#ifdef DEBUG
+      fprintf (stderr, "max_key_length = %d\n", max_key_length);
+#endif
+      context->max_key_length = max_key_length;
+      context->offsets = calloc (sizeof (TableOffsetArray), max_key_length);
+
+      for (offset = 0; offset < context->content_size;)
+	{
+	  int klen = context->content[offset] & 0x3F;
+	  int plen = context->content[offset + 1];
+	  TableOffsetArray *array;
+
+	  assert (klen > 0);
+	  array = &context->offsets[klen - 1];
+	  if (array->cap < array->len + 1)
+	    {
+	      if (array->cap == 0)
+		{
+		  array->cap = 2;
+		  array->data = calloc (sizeof (int), array->cap);
+		  if (!array->data)
+		    return NULL;
+		}
+	      else
+		{
+		  array->cap *= 2;
+		  array->data = realloc (array->data,
+					 sizeof (int) * array->cap);
+		  if (!array->data)
+		    return NULL;
+		  memset (array->data + array->len, 0, array->cap - array->len);
+		}
+	    }
+	  *(array->data + array->len++) = offset;
+	  offset += 4 + klen + plen;
+	}
+    }
+
+  return NULL;
+}
+
 MPlist *
 open (MPlist *args)
 {
@@ -355,7 +517,7 @@ lookup_ibus (TableContext *context, MPlist *args)
   unsigned char buf[256];
   char *word = NULL, *sql = NULL, *msql = NULL;
   MPlist *candidates = mplist ();
-  size_t len, xlen, wlen, mlen;
+  int len, xlen, wlen, mlen;
   int i, rc;
   int *m = NULL;
   sqlite3_stmt *stmt;
@@ -447,6 +609,59 @@ lookup_ibus (TableContext *context, MPlist *args)
     free (sql);
   if (msql)
     free (msql);
+
+  return candidates;
+}
+
+static MPlist *
+lookup_scim (TableContext *context, MPlist *args)
+{
+  unsigned char buf[256];
+  char *word = NULL;
+  MPlist *candidates = mplist ();
+  MText *mt;
+  int rc, len, xlen;
+
+  rc = mtext_to_utf8 (context, context->ic->preedit, buf, sizeof (buf));
+  if (rc < 0 || rc >= context->max_key_length)
+    goto out;
+  word = strdup ((const char *)buf);
+  len = rc;
+
+  for (xlen = 5; xlen <= context->max_key_length
+	 && mplist_length (candidates) == 0; xlen++)
+    {
+      int j;
+
+      for (j = xlen; j > 0; j--)
+	{
+	  TableOffsetArray *array = &context->offsets[j - 1];
+	  int i;
+
+	  for (i = 0; i < array->len; i++)
+	    {
+	      unsigned char *data = &context->content[array->data[i]], *p;
+	      int klen = *data & 0x3F;
+	      int plen = *(data + 1);
+
+	      p = data + 4;
+	      if (strncmp ((const char *)p, word, len) == 0)
+		{
+		  p += klen;
+		  mt = mtext_from_utf8 (context, p, plen);
+		  mplist_add (candidates, Mtext, mt);
+#ifdef DEBUG
+		  mdebug_dump_mtext (mt, 0, 0);
+#endif
+		  m17n_object_unref (mt);
+		}
+	    }
+	}
+    }
+
+ out:
+  if (word)
+    free (word);
 
   return candidates;
 }
