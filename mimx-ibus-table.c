@@ -29,7 +29,7 @@
 #include <m17n.h>
 #include <sqlite3.h>
 
-#define DEBUG 1
+#undef DEBUG
 #define MLEN 4			/* max key length */
 
 static const struct {
@@ -58,11 +58,12 @@ static const struct {
 };
 
 static int phrase_enc_dict[128];
-static char phrase_dec_dict[94];
+static int phrase_dec_dict[128];
 
 struct _TableContext {
   sqlite3 *db;
   MInputContext *ic;
+  MConverter *converter;
 };
 typedef struct _TableContext TableContext;
 
@@ -86,13 +87,13 @@ init_phrase_dict (void)
 }
 
 static int
-encode_phrase (const char *phrase, int **m)
+encode_phrase (const unsigned char *phrase, int **m)
 {
-  const char *p;
+  const unsigned char *p;
 
   if (m)
     {
-      *m = calloc (sizeof (int), strlen (phrase));
+      *m = calloc (sizeof (int), strlen ((const char *)phrase));
       if (!*m)
 	return -1;
     }
@@ -112,7 +113,7 @@ encode_phrase (const char *phrase, int **m)
 
 #if 0
 static int
-decode_phrase (const int *m, size_t mlen, char **phrase)
+decode_phrase (const int *m, size_t mlen, unsigned char **phrase)
 {
   int i;
 
@@ -182,6 +183,8 @@ init (MPlist *args)
 
   context = calloc (sizeof (TableContext), 1);
   context->ic = ic;
+  context->converter = mconv_buffer_converter (Mcoding_utf_8, NULL, 0);
+
   if (context)
     mplist_push (ic->plist, Mtable, context);
   return NULL;
@@ -193,13 +196,69 @@ fini (MPlist *args)
   MInputContext *ic = mplist_value (args);
   TableContext *context = get_context (ic);
 
-  if (context) {
-    if (context->db)
-      sqlite3_close (context->db);
-    context->db = NULL;
-    free (context);
-  }
+  if (context)
+    {
+      if (context->db)
+	sqlite3_close (context->db);
+      mconv_free_converter (context->converter);
+      free (context);
+    }
   return NULL;
+}
+
+static MText *
+mtext_from_utf8 (TableContext *context, const unsigned char *buf, size_t size)
+{
+  mconv_reset_converter (context->converter);
+  mconv_rebind_buffer (context->converter, buf, size);
+  return mconv_decode (context->converter, mtext ());
+}
+
+static ssize_t
+mtext_to_utf8 (TableContext *context, MText *mt, unsigned char *buf,
+	       size_t size)
+{
+  ssize_t nbytes;
+
+  mconv_reset_converter (context->converter);
+  mconv_rebind_buffer (context->converter, (const unsigned char *)buf, size);
+  nbytes = mconv_encode (context->converter, mt);
+  buf[nbytes] = '\0';
+
+  return nbytes;
+}
+
+static int
+get_ime_attr_int (TableContext *context, const char *attr)
+{
+  sqlite3_stmt *stmt;
+  char *sql;
+  int retval = -1, rc;
+
+  /* strlen("SELECT val FROM ime WHERE attr = \"\"") = 35 */
+  sql = calloc (sizeof (char), 35 + strlen (attr) + 1);
+  if (!sql)
+    return -1;
+  rc = sprintf (sql, "SELECT val FROM ime WHERE attr = \"%s\"", attr);
+  if (rc < 0)
+    {
+      free (sql);
+      return -1;
+    }
+  rc = sqlite3_prepare (context->db, sql, strlen (sql), &stmt, NULL);
+  free (sql);
+  sql = NULL;
+  if (rc != SQLITE_OK)
+    {
+      sqlite3_finalize (stmt);
+      return -1;
+    }
+  rc = sqlite3_step (stmt);
+  if (rc == SQLITE_ROW)
+    retval = sqlite3_column_int (stmt, 0);
+  sqlite3_finalize (stmt);
+
+  return retval;
 }
 
 MPlist *
@@ -221,6 +280,8 @@ lookup (MPlist *args)
   size_t len, xlen, wlen, mlen, max_candidates;
 
   ic = mplist_value (args);
+  context = get_context (ic);
+
   args = mplist_next (args);
   init_state = (MSymbol) mplist_value (args);
   args = mplist_next (args);
@@ -228,8 +289,8 @@ lookup (MPlist *args)
 
   args = mplist_next (args);
   mt = (MText *) mplist_value (args);
-  nbytes = mconv_encode_buffer (Mcoding_us_ascii, mt, buf, 256);
-  buf[nbytes] = '\0';
+  nbytes = mtext_to_utf8 (context, mt, buf, sizeof (buf));
+
   file = strdup ((const char *)buf);
 
   args = mplist_next (args);
@@ -239,33 +300,24 @@ lookup (MPlist *args)
   max_candidates = (long) mplist_value (args);
 
   args = mplist_next (args);
-  nbytes = mconv_encode_buffer (Mcoding_us_ascii, ic->preedit, buf, 256);
-  context = get_context (ic);
+  nbytes = mtext_to_utf8 (context, ic->preedit, buf, sizeof (buf));
 
-  if (!context->db) {
-    rc = sqlite3_open_v2 (file, &context->db, SQLITE_OPEN_READONLY, NULL);
-    if (rc) {
-      sqlite3_close (context->db);
-      context->db = NULL;
-      goto out;
+  if (!context->db)
+    {
+      rc = sqlite3_open_v2 (file, &context->db, SQLITE_OPEN_READONLY, NULL);
+      if (rc)
+	{
+	  sqlite3_close (context->db);
+	  context->db = NULL;
+	  goto out;
+	}
     }
-  }
 
-  sql = strdup ("SELECT val FROM ime WHERE attr = \"max_key_length\"");
-  rc = sqlite3_prepare (context->db, sql, strlen (sql), &stmt, NULL);
-  free (sql);
-  sql = NULL;
-  if (rc != SQLITE_OK)
-    goto out;
-  rc = sqlite3_step (stmt);
-  if (rc == SQLITE_ROW)
-    mlen = sqlite3_column_int (stmt, 0);
-  else
+  mlen = get_ime_attr_int (context, "max_key_length");
+  if (mlen < 0)
     mlen = MLEN;
-  sqlite3_finalize (stmt);
 
-  buf[nbytes] = '\0';
-  rc = encode_phrase ((const char *)buf, &m);
+  rc = encode_phrase ((const unsigned char *)buf, &m);
   if (rc)
     goto out;
   /* len(" AND mXX = XX") = 13 */
@@ -325,8 +377,7 @@ lookup (MPlist *args)
 #ifdef DEBUG
 	  fprintf (stderr, " %s\n", text);
 #endif
-	  mt = mconv_decode_buffer (Mcoding_utf_8, text,
-				    strlen ((const char *)text));
+	  mt = mtext_from_utf8 (context, text, strlen ((const char *)text));
 	  mplist_add (candidates, Mtext, mt);
 	  m17n_object_unref (mt);
 	}
