@@ -8,14 +8,11 @@ $ yum install ibus-table sqlite-devel m17n-lib-devel m17n-lib-tools
 $ ./autogen.sh
 $ make
 $ make install M17N_MODULE_DIR=/usr/lib64/m17n/1.0
-$ mkdir -p ~/.m17n.d/
-$ cp latex.mim ~/.m17n.d/
 $ MDEBUG_INPUT=1 m17n-edit --im en-latex
 # type "\phi" and hit Tab, and you will see "φ"
 
 * Use with indic-typing-booster
 
-$ cp mr-*.mim ~/.m17n.d/
 $ git clone http://git.fedorahosted.org/git/indic-typing-booster.git
 $ cd indic-typing-booster/ibus-typing-booster
 $ ./autogen.sh
@@ -26,7 +23,7 @@ $ MDEBUG_INPUT=1 m17n-edit --im mr-inscript-typing-booster
 
 * Use with scim-tables (experimental)
 
-change the "open" calls to libmimx-table in MIM something like:
+change the "open" call to libmimx-table in MIM something like:
 
 (call libmimx-table open scim
       "/usr/share/scim/tables/marathi-inscript.bin")
