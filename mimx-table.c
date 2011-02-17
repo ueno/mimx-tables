@@ -34,7 +34,7 @@
 #include <sqlite3.h>
 
 #undef DEBUG
-#define MLEN 4			/* max key length */
+#define MLEN 4		/* max key length */
 
 static const struct {
   int c, n;
@@ -109,8 +109,7 @@ static MPlist *lookup_scim (TableContext *context, MPlist *args);
 static const TableDescription table_descriptions[] =
   {
     { "ibus", open_ibus, lookup_ibus },
-    { "scim", open_scim, lookup_scim },
-    { NULL }
+    { "scim", open_scim, lookup_scim }
   };
 
 static MSymbol Mtable, Mibus, Mscim;
@@ -285,11 +284,11 @@ mtext_to_utf8 (TableContext *context, MText *mt, unsigned char *buf,
 }
 
 static int
-get_ime_attr_int (TableContext *context, const char *attr)
+get_ime_attr_int (TableContext *context, const char *attr, int *val)
 {
   sqlite3_stmt *stmt;
   char *sql;
-  int retval = -1, rc;
+  int rc;
 
   sql = sqlite3_mprintf ("SELECT val FROM ime WHERE attr = \"%q\"", attr);
   rc = sqlite3_prepare (context->db, sql, strlen (sql), &stmt, NULL);
@@ -301,10 +300,13 @@ get_ime_attr_int (TableContext *context, const char *attr)
     }
   rc = sqlite3_step (stmt);
   if (rc == SQLITE_ROW)
-    retval = sqlite3_column_int (stmt, 0);
+    {
+      *val = sqlite3_column_int (stmt, 0);
+      sqlite3_finalize (stmt);
+      return 0;
+    }
   sqlite3_finalize (stmt);
-
-  return retval;
+  return -1;
 }
 
 static MPlist *
@@ -357,6 +359,12 @@ scim_bytestouint32 (const unsigned char *bytes)
             | (((uint32_t) bytes[1]) << 8)
             | (((uint32_t) bytes[2]) << 16)
             | (((uint32_t) bytes[3]) << 24);
+}
+
+static inline uint16_t
+scim_bytestouint16 (const unsigned char *bytes)
+{
+    return  ((uint16_t) bytes[0]) | (((uint16_t) bytes[1]) << 8);
 }
 
 static MPlist *
@@ -458,7 +466,7 @@ open_scim (TableContext *context, MPlist *args)
 	    {
 	      if (array->cap == 0)
 		{
-		  array->cap = 2;
+		  array->cap = 1;
 		  array->data = calloc (sizeof (int), array->cap);
 		  if (!array->data)
 		    return NULL;
@@ -481,6 +489,9 @@ open_scim (TableContext *context, MPlist *args)
   return NULL;
 }
 
+#define DIM(x) (sizeof (x) / sizeof (*x))
+#define CLAMP(x, low, high)  (((x) > (high)) ? (high) : (((x) < (low)) ? (low) : (x)))
+
 MPlist *
 open (MPlist *args)
 {
@@ -496,9 +507,7 @@ open (MPlist *args)
   type = (MSymbol) mplist_value (args);
   args = mplist_next (args);
 
-  for (i = 0;
-       i < sizeof (table_descriptions) / sizeof (*table_descriptions);
-       i++)
+  for (i = 0; i < DIM(table_descriptions); i++)
     if (strcmp (table_descriptions[i].name, msymbol_name (type)) == 0)
       {
 	context->desc = &table_descriptions[i];
@@ -532,9 +541,10 @@ lookup_ibus (TableContext *context, MPlist *args)
   word = strdup ((const char *)buf);
   len = rc;
 
-  mlen = get_ime_attr_int (context, "max_key_length");
-  if (mlen < 0)
+  rc = get_ime_attr_int (context, "max_key_length", &mlen);
+  if (rc < 0)
     mlen = MLEN;
+  mlen = CLAMP(mlen, 0, 99);
 
   rc = encode_phrase ((const unsigned char *)word, &m);
   if (rc)
@@ -622,6 +632,9 @@ lookup_scim (TableContext *context, MPlist *args)
   MText *mt;
   int rc, len, xlen;
 
+  if (!context->content || !context->offsets)
+    goto out;
+
   rc = mtext_to_utf8 (context, context->ic->preedit, buf, sizeof (buf));
   if (rc < 0 || rc >= context->max_key_length)
     goto out;
@@ -643,6 +656,7 @@ lookup_scim (TableContext *context, MPlist *args)
 	      unsigned char *data = &context->content[array->data[i]], *p;
 	      int klen = *data & 0x3F;
 	      int plen = *(data + 1);
+	      int freq = scim_bytestouint16 (data + 2);
 
 	      p = data + 4;
 	      if (strncmp ((const char *)p, word, len) == 0)
