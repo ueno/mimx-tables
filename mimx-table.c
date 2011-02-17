@@ -623,6 +623,20 @@ lookup_ibus (TableContext *context, MPlist *args)
   return candidates;
 }
 
+struct _TablePhrase {
+  char *text;
+  int freq;
+};
+typedef struct _TablePhrase TablePhrase;
+
+static int
+cmp_phrases_by_freq (const void *a, const void *b)
+{
+  const TablePhrase *pa = a, *pb = b;
+
+  return pb->freq - pa->freq;
+}
+
 static MPlist *
 lookup_scim (TableContext *context, MPlist *args)
 {
@@ -631,6 +645,8 @@ lookup_scim (TableContext *context, MPlist *args)
   MPlist *candidates = mplist ();
   MText *mt;
   int rc, len, xlen;
+  TablePhrase *phrases;
+  int n_phrases, n_allocated_phrases;
 
   if (!context->content || !context->offsets)
     goto out;
@@ -641,8 +657,10 @@ lookup_scim (TableContext *context, MPlist *args)
   word = strdup ((const char *)buf);
   len = rc;
 
-  for (xlen = 5; xlen <= context->max_key_length
-	 && mplist_length (candidates) == 0; xlen++)
+  n_allocated_phrases = 2;
+  phrases = calloc (sizeof (TablePhrase), n_allocated_phrases);
+  for (n_phrases = 0, xlen = 5; xlen <= context->max_key_length
+	 && n_phrases == 0; xlen++)
     {
       int j;
 
@@ -653,25 +671,43 @@ lookup_scim (TableContext *context, MPlist *args)
 
 	  for (i = 0; i < array->len; i++)
 	    {
-	      unsigned char *data = &context->content[array->data[i]], *p;
+	      unsigned char *data = &context->content[array->data[i]];
 	      int klen = *data & 0x3F;
 	      int plen = *(data + 1);
-	      int freq = scim_bytestouint16 (data + 2);
 
-	      p = data + 4;
-	      if (strncmp ((const char *)p, word, len) == 0)
+	      if (strncmp ((const char *)(data + 4), word, len) == 0)
 		{
-		  p += klen;
-		  mt = mtext_from_utf8 (context, p, plen);
-		  mplist_add (candidates, Mtext, mt);
-#ifdef DEBUG
-		  mdebug_dump_mtext (mt, 0, 0);
-#endif
-		  m17n_object_unref (mt);
+		  int freq = scim_bytestouint16 (data + 2);
+
+		  if (++n_phrases > n_allocated_phrases)
+		    {
+		      n_allocated_phrases *= 2;
+		      phrases = realloc (phrases,
+					 sizeof (TablePhrase)
+					 * n_allocated_phrases);
+		    }
+		  phrases[n_phrases - 1].text =
+		    strndup ((const char *)(data + 4 + klen), plen);
+		  phrases[n_phrases - 1].freq = freq;
 		}
 	    }
 	}
     }
+
+  qsort (phrases, n_phrases, sizeof (TablePhrase), cmp_phrases_by_freq);
+  while (n_phrases--)
+    {
+      mt = mtext_from_utf8 (context,
+			    (const unsigned char *)phrases[n_phrases].text,
+			    strlen (phrases[n_phrases].text));
+      free (phrases[n_phrases].text);
+      mplist_push (candidates, Mtext, mt);
+#ifdef DEBUG
+      mdebug_dump_mtext (mt, 0, 0);
+#endif
+      m17n_object_unref (mt);
+    }
+  free (phrases);
 
  out:
   if (word)
