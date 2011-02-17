@@ -797,13 +797,21 @@ lookup (MPlist *args)
   else
     candidates = mplist ();
 
+  actions = mplist ();
+
+  if (mplist_length (candidates) == 0)
+    {
+      add_action (actions, msymbol ("commit"), Mnil, NULL);
+      add_action (actions, msymbol ("shift"), Msymbol, init_state);
+      return actions;
+    }
+
   mt = mtext_dup (ic->preedit);
   mplist_push (candidates, Mtext, mt);
   m17n_object_unref (mt);
   plist = paginate (candidates);
   m17n_object_unref (candidates);
 
-  actions = mplist ();
   add_action (actions, msymbol ("delete"), Msymbol,  msymbol ("@<"));
   mplist_add (actions, Mplist, plist);
   m17n_object_unref (plist);
