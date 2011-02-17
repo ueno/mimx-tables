@@ -32,7 +32,7 @@
  (libmimx-table open lookup init fini))
 
 (map
- (alpha
+ (ascii
   ("A" "A") ("B" "B") ("C" "C") ("D" "D") ("E" "E") ("F" "F") ("G" "G")
   ("H" "H") ("I" "I") ("J" "J") ("K" "K") ("L" "L") ("M" "M") ("N" "N")
   ("O" "O") ("P" "P") ("Q" "Q") ("R" "R") ("S" "S") ("T" "T") ("U" "U")
@@ -78,24 +78,24 @@
 
 (macro
  (lookup
-  (set K @@) (sub K 1) (call libmimx-table lookup alpha select)))
+  (set K @@) (sub K 1) (call libmimx-table lookup ascii select)))
 
 (state
  (init
   (t (call libmimx-table open ibus
 	   "/usr/share/ibus-table/tables/marathi-inscript.db"
 	   5 100))
-  (alpha (lookup)))
+  (ascii (lookup)))
 
- (alpha
-  (alpha (lookup)))
+ (ascii
+  (ascii (lookup)))
 
  (select
   (choose (hide) (shift init))
   (change-candidate)
   (backspace (undo K))
   (commit-preedit (shift init))
-  (alpha (lookup))))
+  (ascii (lookup))))
 
 ;; Local Variables:
 ;; mode: lisp
