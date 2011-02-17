@@ -36,7 +36,7 @@
 #undef DEBUG
 #define MLEN 4		/* max key length */
 #define XLEN 2
-#define MAX_CANDIDATES 100
+#define MAX_CANDIDATES 0	/* unlimited */
 
 static const struct {
   int c, n;
@@ -606,11 +606,13 @@ lookup_ibus (TableContext *context, MPlist *args)
 			"SELECT id, phrase FROM phrases WHERE mlen < %lu",
 			len + xlen);
       strcat (sql, msql);
-      sqlite3_snprintf (128,
-			sql + strlen (sql),
-			" ORDER BY mlen ASC, user_freq DESC, freq DESC, id ASC"
-			" LIMIT %lu",
-			context->max_candidates);
+      strcat (sql, " ORDER BY mlen ASC, user_freq DESC, freq DESC, id ASC");
+      if (context->max_candidates)
+	sqlite3_snprintf (128,
+			  sql + strlen (sql),
+			  " LIMIT %lu",
+			  context->max_candidates);
+
 #ifdef DEBUG
       fprintf (stderr, "%s\n", sql);
 #endif
@@ -730,7 +732,8 @@ lookup_scim (TableContext *context, MPlist *args)
 			    strlen (phrases[n_phrases].text));
       free (phrases[n_phrases].text);
 
-      if (mplist_length (candidates) < context->max_candidates)
+      if (!context->max_candidates
+	  || mplist_length (candidates) < context->max_candidates)
 	{
 	  mplist_push (candidates, Mtext, mt);
 #ifdef DEBUG
