@@ -23,7 +23,13 @@ AC_SUBST(M17N_MODULE_DIR)
 PKG_CHECK_MODULES([SQLITE3], [sqlite3], ,
   [AC_MSG_ERROR([sqlite3 not found])])
 
+AC_ARG_WITH([ibus-table-dir],
+  [AS_HELP_STRING([--with-ibus-table-dir],
+    [specify the location of ibus-table databases])],
+  [ibus_table_dir=$withval],
+  [ibus_table_dir="\${datadir}/ibus-table/tables"])
+AC_SUBST(ibus_table_dir)
+
 AC_CONFIG_HEADERS([config.h])
 AC_CONFIG_FILES([Makefile])
 AC_OUTPUT
-

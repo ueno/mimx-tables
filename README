@@ -1,21 +1,19 @@
 mimx-table - an m17n-lib external module for reading ibus-table database
 
-NOTE: this module is proof-of-concept and has not yet reached a usable state
-
 * Install on Fedora
 
 $ yum install ibus-table sqlite-devel m17n-lib-devel m17n-lib-tools
-$ ./autogen.sh
+$ ./autogen.sh --prefix=/usr
 $ make
 $ make install M17N_MODULE_DIR=/usr/lib64/m17n/1.0
 $ MDEBUG_INPUT=1 m17n-edit --im en-latex
-# type "\phi" and hit Tab, and you will see "φ"
+# type "\phi", and you will see "φ"
 
 * Use with indic-typing-booster
 
 $ git clone http://git.fedorahosted.org/git/indic-typing-booster.git
 $ cd indic-typing-booster/ibus-typing-booster
-$ ./autogen.sh
+$ ./autogen.sh --prefix=/usr
 $ make
 $ make install
 $ MDEBUG_INPUT=1 m17n-edit --im mr-inscript-typing-booster

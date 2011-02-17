@@ -1,0 +1,58 @@
+;; mr-phonetic-typing-booster.mim -- Marathi input method with typing booster.
+;; Copyright (C) 2011 Daiki Ueno <ueno@unixuser.org>
+;; Copyright (C) 2011 Red Hat, Inc.
+;; Copyright (C) 2003, 2004, 2005, 2009
+;;   National Institute of Advanced Industrial Science and Technology (AIST)
+;;   Registration Number H15PRO112
+
+;; This file is part of the m17n library.
+
+;; The m17n library is free software; you can redistribute it and/or
+;; modify it under the terms of the GNU Lesser General Public License
+;; as published by the Free Software Foundation; either version 2.1 of
+;; the License, or (at your option) any later version.
+
+;; The m17n library is distributed in the hope that it will be useful,
+;; but WITHOUT ANY WARRANTY; without even the implied warranty of
+;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+;; Lesser General Public License for more details.
+
+;; You should have received a copy of the GNU Lesser General Public
+;; License along with the m17n library; if not, write to the Free
+;; Software Foundation, Inc., 51 Franklin Street, Fifth Floor,
+;; Boston, MA 02110-1301, USA.
+
+(input-method mr phonetic-typing-booster)
+
+(description "Marathi input method for phonetic layout, with typing booster.")
+
+(title "क")
+
+(include (t nil table-util) map)
+
+(module
+ (libmimx-table open lookup init fini))
+
+(macro
+ (lookup
+  (set K @@) (sub K 1) (call libmimx-table lookup ascii select)))
+
+(state
+ (init
+  (nil (call libmimx-table open ibus "@ibus_table_dir@/marathi-phonetic.db"
+	     5 100))
+  (ascii (lookup)))
+
+ (ascii
+  (ascii (lookup)))
+
+ (select
+  (choose (hide) (shift init))
+  (change-candidate)
+  (backspace (undo K))
+  (commit-preedit (shift init))
+  (ascii (lookup))))
+
+;; Local Variables:
+;; mode: lisp
+;; End:
