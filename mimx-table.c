@@ -35,6 +35,8 @@
 
 #undef DEBUG
 #define MLEN 4		/* max key length */
+#define XLEN 2
+#define MAX_CANDIDATES 100
 
 static const struct {
   int c, n;
@@ -85,17 +87,18 @@ struct _TableContext {
   MInputContext *ic;
   MConverter *converter;
 
+  int mlen;
+  int xlen;
+  int max_candidates;
+
   /* ibus-table */
   char *file;
   sqlite3 *db;
-  int xlen;
-  int max_candidates;
 
   /* scim-tables */
   FILE *fp;
   void *mem;
   size_t memlen;
-  int max_key_length;
   unsigned char *content;
   int content_size;
   TableOffsetArray *offsets;
@@ -322,10 +325,18 @@ open_ibus (TableContext *context, MPlist *args)
   if (rc < 0)
     return NULL;
   file = strdup ((const char *)buf);
+
   args = mplist_next (args);
-  context->xlen = (long) mplist_value (args);
+  if (mplist_key (args) == Minteger)
+    context->xlen = (long) mplist_value (args);
+  else
+    context->xlen = XLEN;
+
   args = mplist_next (args);
-  context->max_candidates = (long) mplist_value (args);
+  if (mplist_key (args) == Minteger)
+    context->max_candidates = (long) mplist_value (args);
+  else
+    context->max_candidates = MAX_CANDIDATES;
 
   if (context->db && context->file && strcmp (context->file, file) != 0)
     {
@@ -345,6 +356,9 @@ open_ibus (TableContext *context, MPlist *args)
 	  free (context->file);
 	  context->file = NULL;
 	}
+      rc = get_ime_attr_int (context, "max_key_length", &context->mlen);
+      if (rc < 0)
+	context->mlen = MLEN;
     }
 
   return NULL;
@@ -381,6 +395,18 @@ open_scim (TableContext *context, MPlist *args)
     return NULL;
   file = strdup ((const char *)buf);
 
+  args = mplist_next (args);
+  if (mplist_key (args) == Minteger)
+    context->xlen = (long) mplist_value (args);
+  else
+    context->xlen = XLEN;
+
+  args = mplist_next (args);
+  if (mplist_key (args) == Minteger)
+    context->max_candidates = (long) mplist_value (args);
+  else
+    context->max_candidates = MAX_CANDIDATES;
+
   if (context->mem && context->file && strcmp (context->file, file) != 0)
     {
       munmap (context->mem, context->memlen);
@@ -404,6 +430,18 @@ open_scim (TableContext *context, MPlist *args)
 	    break;
 	  if (strncmp ("###", (const char *)buf, 3) == 0)
 	    continue;
+	  if (strncmp ("MAX_KEY_LENGTH", (const char *)buf, 14) == 0)
+	    {
+	      char *p = strrchr ((char *)buf, '\n');
+	      if (!*p)
+		continue;
+	      *p-- = '\0';
+	      while (*p >= '0' && *p <= '9')
+		p--;
+
+	      context->mlen = strtoul (p + 1, NULL, 10);
+	      continue;
+	    }
 	  if (strncmp ("BEGIN_TABLE", (const char *)buf, 11) == 0)
 	    {
 	      long start_pos, end_pos;
@@ -419,9 +457,9 @@ open_scim (TableContext *context, MPlist *args)
 		break;
 	      context->mem = mmap (0, end_pos, PROT_READ, MAP_PRIVATE,
 				   fileno (context->fp), 0);
-	      context->memlen = end_pos;
 	      if (context->mem)
 		{
+		  context->memlen = end_pos;
 		  context->content = (unsigned char *)context->mem + start_pos;
 		  context->file = file;
 		}
@@ -438,22 +476,12 @@ open_scim (TableContext *context, MPlist *args)
 
   if (!context->offsets)
     {
-      int offset, max_key_length = 0;
-      for (offset = 0; offset < context->content_size;)
-	{
-	  int klen = context->content[offset] & 0x3F;
-	  int plen = context->content[offset + 1];
+      int offset;
 
-	  if ((context->content[offset] & 0x80) != 0 && klen > max_key_length)
-	    max_key_length = klen;
-	  offset += klen + plen + 6;
-	}
-#ifdef DEBUG
-      fprintf (stderr, "max_key_length = %d\n", max_key_length);
-#endif
-      context->max_key_length = max_key_length;
-      context->offsets = calloc (sizeof (TableOffsetArray), max_key_length);
-
+      if (!context->mlen)
+	context->mlen = MLEN;
+      context->offsets = calloc (sizeof (TableOffsetArray), context->mlen);
+      
       for (offset = 0; offset < context->content_size;)
 	{
 	  int klen = context->content[offset] & 0x3F;
@@ -461,6 +489,9 @@ open_scim (TableContext *context, MPlist *args)
 	  TableOffsetArray *array;
 
 	  assert (klen > 0);
+	  if (klen > context->mlen)
+	    continue;
+
 	  array = &context->offsets[klen - 1];
 	  if (array->cap < array->len + 1)
 	    {
@@ -541,10 +572,7 @@ lookup_ibus (TableContext *context, MPlist *args)
   word = strdup ((const char *)buf);
   len = rc;
 
-  rc = get_ime_attr_int (context, "max_key_length", &mlen);
-  if (rc < 0)
-    mlen = MLEN;
-  mlen = CLAMP(mlen, 0, 99);
+  mlen = CLAMP(context->mlen, 0, 99);
 
   rc = encode_phrase ((const unsigned char *)word, &m);
   if (rc)
@@ -652,14 +680,14 @@ lookup_scim (TableContext *context, MPlist *args)
     goto out;
 
   rc = mtext_to_utf8 (context, context->ic->preedit, buf, sizeof (buf));
-  if (rc < 0 || rc >= context->max_key_length)
+  if (rc < 0 || rc >= context->mlen)
     goto out;
   word = strdup ((const char *)buf);
   len = rc;
 
   n_allocated_phrases = 2;
   phrases = calloc (sizeof (TablePhrase), n_allocated_phrases);
-  for (n_phrases = 0, xlen = 5; xlen <= context->max_key_length
+  for (n_phrases = 0, xlen = context->xlen; xlen <= context->mlen
 	 && n_phrases == 0; xlen++)
     {
       int j;
@@ -701,11 +729,15 @@ lookup_scim (TableContext *context, MPlist *args)
 			    (const unsigned char *)phrases[n_phrases].text,
 			    strlen (phrases[n_phrases].text));
       free (phrases[n_phrases].text);
-      mplist_push (candidates, Mtext, mt);
+
+      if (mplist_length (candidates) < context->max_candidates)
+	{
+	  mplist_push (candidates, Mtext, mt);
 #ifdef DEBUG
-      mdebug_dump_mtext (mt, 0, 0);
+	  mdebug_dump_mtext (mt, 0, 0);
 #endif
-      m17n_object_unref (mt);
+	  m17n_object_unref (mt);
+	}
     }
   free (phrases);
 
