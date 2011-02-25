@@ -797,14 +797,30 @@ lookup (MPlist *args)
   else
     candidates = mplist ();
 
-  actions = mplist ();
+  if (mplist_length (candidates) == 0) {
+    m17n_object_unref (candidates);
+    return NULL;
+  }
 
-  if (mplist_length (candidates) == 0)
-    {
-      add_action (actions, msymbol ("commit"), Mnil, NULL);
-      add_action (actions, msymbol ("shift"), Msymbol, init_state);
-      return actions;
-    }
+#if 0
+  /* FIXME: if only one candidate is matching, we should insert it and
+     commit immediately.  However, this feature is disabled for now
+     since users would type extra characters after the match.  For
+     example, with mr-inscript-typing-booster, an Indic word
+     "Epgyepgne" is only one candidate when a user type "Epgyepgn",
+     but the user will likely to type "e" after commit.
+  */
+  if (mplist_length (candidates) == 1) {
+    actions = mplist ();
+    add_action (actions, msymbol ("delete"), Msymbol,  msymbol ("@<"));
+    add_action (actions, msymbol ("insert"), Mtext, mplist_value (candidates));
+    add_action (actions, msymbol ("commit"), Mnil, NULL);
+    m17n_object_unref (candidates);
+    return actions;
+  }
+#endif
+
+  actions = mplist ();
 
   mt = mtext_dup (ic->preedit);
   mplist_push (candidates, Mtext, mt);
@@ -815,6 +831,7 @@ lookup (MPlist *args)
   add_action (actions, msymbol ("delete"), Msymbol,  msymbol ("@<"));
   mplist_add (actions, Mplist, plist);
   m17n_object_unref (plist);
+  add_action (actions, msymbol ("select"), Minteger, (void *)1);
   add_action (actions, msymbol ("show"), Mnil, NULL);
   add_action (actions, msymbol ("shift"), Msymbol, select_state);
 

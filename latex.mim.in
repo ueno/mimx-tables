@@ -40,17 +40,17 @@
 (state
  (init
   (t (call libmimx-table open ibus "@ibus_table_dir@/latex.db" 2))
-  (ascii (lookup)))
+  (ascii (insert C) (lookup)))
 
  (ascii
-  (ascii (lookup)))
+  (ascii (insert C) (lookup)))
 
  (select
   (choose (hide) (shift init))
   (change-candidate)
   (backspace (undo K))
   (commit-preedit (shift init))
-  (ascii (lookup))))
+  (ascii (select @<) (insert C) (lookup))))
 
 ;; Local Variables:
 ;; mode: lisp
